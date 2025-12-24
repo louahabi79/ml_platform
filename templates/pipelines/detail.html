@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Pipeline · ML Platform{% endblock %}
+
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h2 class="mb-0">{{ pipeline.name }}</h2>
+      <div class="text-muted">Task: <span class="badge bg-secondary">{{ pipeline.task_type }}</span></div>
+    </div>
+    <a class="btn btn-primary" href="{% url 'experiment_create' pipeline_id=pipeline.id %}">Create Experiment</a>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-header fw-semibold">Steps</div>
+    <div class="card-body">
+      {% if steps %}
+        <table class="table table-sm">
+          <thead><tr><th>#</th><th>Type</th><th>Enabled</th><th>Config</th></tr></thead>
+          <tbody>
+            {% for s in steps %}
+              <tr>
+                <td>{{ s.order }}</td>
+                <td><code>{{ s.step_type }}</code></td>
+                <td>{% if s.enabled %}✅{% else %}—{% endif %}</td>
+                <td><pre class="mb-0">{{ s.config|safe|pprint }}</pre></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="text-muted">No steps.</div>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}

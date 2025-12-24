@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Dataset · ML Platform{% endblock %}
+
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h2 class="mb-0">{{ dataset.name }}</h2>
+      <div class="text-muted">{{ dataset.description }}</div>
+    </div>
+    <a class="btn btn-primary" href="{% url 'dataset_upload' %}">Upload New Version</a>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-header fw-semibold">Versions</div>
+    <div class="card-body">
+      {% if versions %}
+        <ul class="list-group">
+          {% for v in versions %}
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+              <a href="{% url 'dataset_version_detail' version_id=v.id %}">v{{ v.version_number }}</a>
+              <small class="text-muted">{{ v.created_at|date:"Y-m-d H:i" }}</small>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="text-muted">No versions.</div>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}

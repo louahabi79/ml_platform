@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Project · ML Platform{% endblock %}
+
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h2 class="mb-0">{{ project.name }}</h2>
+      <div class="text-muted">{{ project.description }}</div>
+    </div>
+    <a class="btn btn-primary" href="{% url 'dataset_upload' %}">Upload Dataset</a>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-4">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Datasets</div>
+        <div class="card-body">
+          {% if datasets %}
+            <ul class="list-group">
+              {% for d in datasets %}
+                <li class="list-group-item">
+                  <a href="{% url 'dataset_detail' dataset_id=d.id %}">{{ d.name }}</a>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="text-muted">No datasets yet.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Pipelines</div>
+        <div class="card-body">
+          {% if pipelines %}
+            <ul class="list-group">
+              {% for p in pipelines %}
+                <li class="list-group-item">
+                  <a href="{% url 'pipeline_detail' pipeline_id=p.id %}">{{ p.name }}</a>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="text-muted">No pipelines yet.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Experiments</div>
+        <div class="card-body">
+          {% if experiments %}
+            <ul class="list-group">
+              {% for e in experiments %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <a href="{% url 'experiment_results' experiment_id=e.id %}">{{ e.name }}</a>
+                  <span class="badge bg-secondary">{{ e.status }}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="text-muted">No experiments yet.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

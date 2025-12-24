@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Results · ML Platform{% endblock %}
+
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h2 class="mb-0">Results: {{ exp.name }}</h2>
+      <div class="text-muted">
+        Algorithm: <span class="fw-semibold">{{ exp.algorithm.display_name }}</span>
+        · Status: <span class="badge bg-secondary">{{ exp.status }}</span>
+      </div>
+    </div>
+
+    <div class="d-flex gap-2">
+      {% if artifact %}
+        <a class="btn btn-outline-primary" href="{% url 'download_model' experiment_id=exp.id %}">Download Model (.pkl)</a>
+      {% endif %}
+      <a class="btn btn-outline-success" href="{% url 'predict_view' experiment_id=exp.id %}">Predict New Data</a>
+      <a class="btn btn-outline-danger" href="{% url 'download_report_pdf' experiment_id=exp.id %}">Download PDF Report</a>
+      <a class="btn btn-outline-secondary" href="{% url 'project_detail' project_id=exp.project_id %}">Back to Project</a>
+    </div>
+  </div>
+
+  {% if exp.status != "SUCCEEDED" %}
+    <div class="alert alert-info">
+      This experiment is currently <strong>{{ exp.status }}</strong>.
+      Refresh this page in a few seconds to see results when training finishes.
+      {% if exp.error_message %}
+        <hr />
+        <div class="text-danger"><strong>Error:</strong> {{ exp.error_message }}</div>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <div class="row g-3">
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Test Metrics</div>
+        <div class="card-body">
+          {% if test_metrics %}
+            <table class="table table-sm">
+              <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+              <tbody>
+                {% for k, v in test_metrics.items %}
+                  <tr><td>{{ k }}</td><td><code>{{ v }}</code></td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="text-muted">No test metrics yet.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Cross-Validation Summary</div>
+        <div class="card-body">
+          {% if cv_metrics %}
+            <table class="table table-sm">
+              <thead><tr><th>Metric</th><th>Mean</th><th>Std</th></tr></thead>
+              <tbody>
+                {% for metric, stats in cv_metrics.items %}
+                  <tr>
+                    <td>{{ metric }}</td>
+                    <td><code>{{ stats.mean }}</code></td>
+                    <td><code>{{ stats.std }}</code></td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="text-muted">CV disabled or not available.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Confusion Matrix (Classification)</div>
+        <div class="card-body">
+          {% if cm_matrix and cm_matrix|length > 0 %}
+            <div class="table-responsive">
+              <table class="table table-bordered table-sm text-center align-middle">
+                <tbody>
+                  {% for row in cm_matrix %}
+                    <tr>
+                      {% for cell in row %}
+                        <td><code>{{ cell }}</code></td>
+                      {% endfor %}
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            <div class="small text-muted">Rows = true class, Columns = predicted class.</div>
+          {% else %}
+            <div class="text-muted">No confusion matrix available (not a classification run or not finished).</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+    <div class="row g-3 mt-1">
+    {% if plot_map.exp_learning_curve %}
+      <div class="col-lg-6">
+        <div class="card shadow-sm">
+          <div class="card-header fw-semibold">Learning Curve</div>
+          <div class="card-body">
+            <img class="img-fluid rounded border" src="{{ plot_map.exp_learning_curve }}" alt="Learning curve">
+          </div>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if plot_map.exp_actual_vs_predicted %}
+      <div class="col-lg-6">
+        <div class="card shadow-sm">
+          <div class="card-header fw-semibold">Actual vs Predicted (Regression)</div>
+          <div class="card-body">
+            <img class="img-fluid rounded border" src="{{ plot_map.exp_actual_vs_predicted }}" alt="Actual vs predicted">
+          </div>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if plot_map.exp_confusion_matrix %}
+      <div class="col-lg-6">
+        <div class="card shadow-sm">
+          <div class="card-header fw-semibold">Confusion Matrix (Heatmap)</div>
+          <div class="card-body">
+            <img class="img-fluid rounded border" src="{{ plot_map.exp_confusion_matrix }}" alt="Confusion matrix heatmap">
+          </div>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+{% endblock %}

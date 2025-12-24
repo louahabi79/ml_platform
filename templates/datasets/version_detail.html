@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Dataset Version · ML Platform{% endblock %}
+
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h2 class="mb-0">{{ dv.dataset.name }} — v{{ dv.version_number }}</h2>
+      <div class="text-muted">Rows: {{ dv.row_count }} · Columns: {{ dv.column_count }} · SHA256: <code>{{ dv.sha256 }}</code></div>
+    </div>
+    <a class="btn btn-success" href="{% url 'pipeline_wizard' version_id=dv.id %}">Build Pipeline Wizard</a>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Columns</div>
+        <div class="card-body">
+          <table class="table table-sm">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Dtype</th>
+                <th>Missing</th>
+                <th>Unique</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for c in columns %}
+                <tr>
+                  <td>{{ c.name }}</td>
+                  <td><code>{{ c.dtype }}</code></td>
+                  <td>--</td>
+                  <td>--</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+
+          <div class="small text-muted">
+            Missing/unique details are stored in <code>profile_json</code> (used later for visualization).
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Profile Summary</div>
+        <div class="card-body">
+          <pre class="mb-0">{{ profile|safe|pprint }}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

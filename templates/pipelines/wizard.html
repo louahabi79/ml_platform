@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+{% block title %}Pipeline Wizard · ML Platform{% endblock %}
+
+{% block content %}
+  <div class="mb-3">
+    <h2 class="mb-1">Pipeline Wizard</h2>
+    <div class="text-muted">
+      Project: <span class="fw-semibold">{{ project.name }}</span> ·
+      Dataset: <span class="fw-semibold">{{ dataset.name }}</span> ·
+      Version: <span class="fw-semibold">v{{ dv.version_number }}</span>
+    </div>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <form method="post" id="wizardForm">
+        {% csrf_token %}
+
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Pipeline Name</label>
+            <input class="form-control" name="pipeline_name" placeholder="e.g., Baseline Prep v1" required />
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">Task Type</label>
+            <select class="form-select" name="task_type" id="taskType" required>
+              {% for t in task_types %}
+                <option value="{{ t.value }}">{{ t.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="col-md-6" id="targetBlock">
+            <label class="form-label">Target Column</label>
+            <select class="form-select" name="target_column" id="targetColumn">
+              <option value="">Select target</option>
+              {% for c in columns %}
+                <option value="{{ c }}">{{ c }}</option>
+              {% endfor %}
+            </select>
+            <div class="form-text">Required for Regression/Classification. Not used for Clustering.</div>
+          </div>
+        </div>
+
+        <hr class="my-4" />
+
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h5 class="mb-0">Pipeline Steps</h5>
+          <button type="button" class="btn btn-outline-primary btn-sm" id="addStepBtn">+ Add Step</button>
+        </div>
+
+        <div id="stepsContainer" class="vstack gap-2"></div>
+
+        <input type="hidden" name="steps_json" id="stepsJson" />
+
+        <div class="mt-4 d-flex gap-2">
+          <button class="btn btn-success" type="submit">Create Pipeline</button>
+          <a class="btn btn-outline-secondary" href="{% url 'dataset_version_detail' version_id=dv.id %}">Back</a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <template id="stepTemplate">
+    <div class="card border">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center">
+          <div class="d-flex gap-2 align-items-center">
+            <span class="badge bg-secondary stepIndexBadge">Step</span>
+            <select class="form-select form-select-sm stepType" style="width: 260px;">
+              <option value="MISSING_VALUES">Missing Values (Imputer)</option>
+              <option value="ENCODING">Encoding (Categoricals)</option>
+              <option value="SCALING">Scaling (Numerics)</option>
+              <option value="POLYNOMIAL_FEATURES">Polynomial Features</option>
+            </select>
+            <div class="form-check ms-2">
+              <input class="form-check-input stepEnabled" type="checkbox" checked>
+              <label class="form-check-label">Enabled</label>
+            </div>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline-danger removeStepBtn">Remove</button>
+        </div>
+
+        <div class="mt-3 configArea"></div>
+      </div>
+    </div>
+  </template>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const stepsContainer = document.getElementById("stepsContainer");
+  const stepTemplate = document.getElementById("stepTemplate");
+  const stepsJsonEl = document.getElementById("stepsJson");
+  const wizardForm = document.getElementById("wizardForm");
+  const taskTypeEl = document.getElementById("taskType");
+  const targetBlock = document.getElementById("targetBlock");
+  const targetColumnEl = document.getElementById("targetColumn");
+
+  function renderTargetVisibility() {
+    const t = taskTypeEl.value;
+    const supervised = (t === "REGRESSION" || t === "CLASSIFICATION");
+    targetBlock.style.display = supervised ? "" : "none";
+    if (!supervised) targetColumnEl.value = "";
+  }
+
+  taskTypeEl.addEventListener("change", renderTargetVisibility);
+  renderTargetVisibility();
+
+  function configHTMLFor(type) {
+    if (type === "MISSING_VALUES") {
+      return `
+        <div class="row g-2">
+          <div class="col-md-4">
+            <label class="form-label">Strategy</label>
+            <select class="form-select form-select-sm cfg_strategy">
+              <option value="mean">mean (numeric)</option>
+              <option value="median">median (numeric)</option>
+              <option value="most_frequent">most_frequent</option>
+              <option value="constant">constant</option>
+              <option value="drop_rows">drop_rows</option>
+              <option value="drop_columns">drop_columns</option>
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Fill Value (if constant)</label>
+            <input class="form-control form-control-sm cfg_fill_value" placeholder="e.g., 0 or 'unknown'" />
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Columns (optional, comma-separated)</label>
+            <input class="form-control form-control-sm cfg_columns" placeholder="leave empty for all" />
+          </div>
+        </div>
+        <div class="form-text">If drop_columns with empty columns, the runner drops only columns you list (recommended).</div>
+      `;
+    }
+    if (type === "ENCODING") {
+      return `
+        <div class="row g-2">
+          <div class="col-md-4">
+            <label class="form-label">Encoder</label>
+            <select class="form-select form-select-sm cfg_encoder">
+              <option value="onehot">OneHotEncoder</option>
+              <option value="ordinal">OrdinalEncoder</option>
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">handle_unknown</label>
+            <select class="form-select form-select-sm cfg_handle_unknown">
+              <option value="ignore">ignore</option>
+              <option value="error">error</option>
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Columns (optional, comma-separated)</label>
+            <input class="form-control form-control-sm cfg_columns" placeholder="leave empty for all categoricals" />
+          </div>
+        </div>
+      `;
+    }
+    if (type === "SCALING") {
+      return `
+        <div class="row g-2">
+          <div class="col-md-4">
+            <label class="form-label">Scaler</label>
+            <select class="form-select form-select-sm cfg_scaler">
+              <option value="standard">StandardScaler</option>
+              <option value="minmax">MinMaxScaler</option>
+              <option value="robust">RobustScaler</option>
+              <option value="none">None</option>
+            </select>
+          </div>
+          <div class="col-md-8">
+            <label class="form-label">Columns (optional, comma-separated)</label>
+            <input class="form-control form-control-sm cfg_columns" placeholder="leave empty for all numerics" />
+          </div>
+        </div>
+      `;
+    }
+    if (type === "POLYNOMIAL_FEATURES") {
+      return `
+        <div class="row g-2">
+          <div class="col-md-4">
+            <label class="form-label">Degree</label>
+            <input type="number" class="form-control form-control-sm cfg_degree" min="2" max="10" value="2" />
+          </div>
+          <div class="col-md-4">
+            <div class="form-check mt-4">
+              <input class="form-check-input cfg_include_bias" type="checkbox">
+              <label class="form-check-label">include_bias</label>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="form-check mt-4">
+              <input class="form-check-input cfg_interaction_only" type="checkbox">
+              <label class="form-check-label">interaction_only</label>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    return `<div class="text-muted">No config.</div>`;
+  }
+
+  function collectConfig(cardEl, type) {
+    const cfg = {};
+    if (type === "MISSING_VALUES") {
+      cfg.strategy = cardEl.querySelector(".cfg_strategy").value;
+      const fv = cardEl.querySelector(".cfg_fill_value").value.trim();
+      if (fv !== "") cfg.fill_value = fv;
+      const cols = cardEl.querySelector(".cfg_columns").value.trim();
+      if (cols !== "") cfg.columns = cols.split(",").map(s => s.trim()).filter(Boolean);
+      return cfg;
+    }
+    if (type === "ENCODING") {
+      cfg.encoder = cardEl.querySelector(".cfg_encoder").value;
+      cfg.handle_unknown = cardEl.querySelector(".cfg_handle_unknown").value;
+      const cols = cardEl.querySelector(".cfg_columns").value.trim();
+      if (cols !== "") cfg.columns = cols.split(",").map(s => s.trim()).filter(Boolean);
+      return cfg;
+    }
+    if (type === "SCALING") {
+      cfg.scaler = cardEl.querySelector(".cfg_scaler").value;
+      const cols = cardEl.querySelector(".cfg_columns").value.trim();
+      if (cols !== "") cfg.columns = cols.split(",").map(s => s.trim()).filter(Boolean);
+      return cfg;
+    }
+    if (type === "POLYNOMIAL_FEATURES") {
+      cfg.degree = parseInt(cardEl.querySelector(".cfg_degree").value, 10);
+      cfg.include_bias = cardEl.querySelector(".cfg_include_bias").checked;
+      cfg.interaction_only = cardEl.querySelector(".cfg_interaction_only").checked;
+      return cfg;
+    }
+    return cfg;
+  }
+
+  function reindex() {
+    [...stepsContainer.children].forEach((el, idx) => {
+      el.querySelector(".stepIndexBadge").textContent = `Step ${idx+1}`;
+    });
+  }
+
+  function addStep() {
+    const node = stepTemplate.content.cloneNode(true);
+    const card = node.querySelector(".card");
+    const typeSel = node.querySelector(".stepType");
+    const configArea = node.querySelector(".configArea");
+
+    function renderConfig() {
+      configArea.innerHTML = configHTMLFor(typeSel.value);
+    }
+    typeSel.addEventListener("change", renderConfig);
+    renderConfig();
+
+    node.querySelector(".removeStepBtn").addEventListener("click", () => {
+      card.remove();
+      reindex();
+    });
+
+    stepsContainer.appendChild(node);
+    reindex();
+  }
+
+  document.getElementById("addStepBtn").addEventListener("click", addStep);
+
+  // Add a sensible default set
+  addStep(); // Missing
+  addStep(); // Encoding
+  addStep(); // Scaling
+
+  wizardForm.addEventListener("submit", (e) => {
+    const steps = [...stepsContainer.children].map((cardEl) => {
+      const step_type = cardEl.querySelector(".stepType").value;
+      const enabled = cardEl.querySelector(".stepEnabled").checked;
+      const config = collectConfig(cardEl, step_type);
+      return { step_type, enabled, config };
+    });
+    stepsJsonEl.value = JSON.stringify(steps);
+  });
+</script>
+{% endblock %}

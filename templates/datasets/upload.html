@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Upload Dataset · ML Platform{% endblock %}
+
+{% block content %}
+  <h2 class="mb-3">Upload CSV Dataset</h2>
+
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <form method="post" enctype="multipart/form-data" class="row g-3">
+        {% csrf_token %}
+
+        <div class="col-md-6">
+          <label class="form-label">Project</label>
+          <select class="form-select" name="project_id" required>
+            <option value="">Select a project</option>
+            {% for p in projects %}
+              <option value="{{ p.id }}">{{ p.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Projects group datasets, pipelines, and experiments.</div>
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Dataset Name</label>
+          <input class="form-control" name="dataset_name" placeholder="e.g., House Prices" required />
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">Description (optional)</label>
+          <textarea class="form-control" name="description" rows="2"></textarea>
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">CSV File</label>
+          <input class="form-control" type="file" name="file" accept=".csv" required />
+        </div>
+
+        <div class="col-12 d-flex gap-2">
+          <button class="btn btn-primary" type="submit">Upload & Profile</button>
+          <a class="btn btn-outline-secondary" href="{% url 'dashboard' %}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

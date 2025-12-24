@@ -1,0 +1,270 @@
+{% extends "base.html" %}
+{% block title %}Create Experiment · ML Platform{% endblock %}
+
+{% block content %}
+  <h2 class="mb-3">Create Experiment</h2>
+
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <div class="mb-3 text-muted">
+        Pipeline: <span class="fw-semibold">{{ pipeline.name }}</span>
+        · Task: <span class="badge bg-secondary">{{ task_type }}</span>
+      </div>
+
+      <form method="post" id="expForm">
+        {% csrf_token %}
+
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Experiment Name</label>
+            <input class="form-control" name="name" required placeholder="e.g., Random Forest Baseline" />
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">Algorithm</label>
+            <select class="form-select" name="algorithm_id" id="algorithmSelect" required>
+              <option value="">Select algorithm</option>
+              {% for a in algorithms %}
+                <option value="{{ a.id }}">{{ a.display_name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="col-md-3">
+            <label class="form-label">Test Size</label>
+            <input class="form-control" name="test_size" type="number" step="0.05" min="0.05" max="0.5" value="0.2" />
+          </div>
+
+          <div class="col-md-3">
+            <label class="form-label">CV Folds</label>
+            <input class="form-control" name="cv_folds" type="number" min="2" max="20" value="5" />
+          </div>
+
+          <div class="col-md-6 d-flex align-items-end">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="use_cross_validation" id="useCv" checked>
+              <label class="form-check-label" for="useCv">Use Cross-Validation</label>
+            </div>
+          </div>
+        </div>
+
+        <hr class="my-4" />
+
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h5 class="mb-0">Hyperparameters</h5>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="resetDefaultsBtn">Reset to defaults</button>
+        </div>
+
+        <div id="hyperparamsArea" class="row g-3"></div>
+
+        <input type="hidden" name="hyperparameters_json" id="hyperparametersJson" />
+
+        <div class="mt-4 d-flex gap-2">
+          <button class="btn btn-primary" type="submit">Run Experiment</button>
+          <a class="btn btn-outline-secondary" href="{% url 'pipeline_detail' pipeline_id=pipeline.id %}">Back</a>
+        </div>
+      </form>
+
+      <script id="algorithmsData" type="application/json">{{ algorithms_json|safe }}</script>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const algoData = JSON.parse(document.getElementById("algorithmsData").textContent);
+  const algoSelect = document.getElementById("algorithmSelect");
+  const area = document.getElementById("hyperparamsArea");
+  const expForm = document.getElementById("expForm");
+  const hyperJsonEl = document.getElementById("hyperparametersJson");
+  const resetBtn = document.getElementById("resetDefaultsBtn");
+
+  function currentAlgo() {
+    const id = parseInt(algoSelect.value, 10);
+    return algoData.find(a => a.id === id) || null;
+  }
+
+  function makeInput(name, schema) {
+    const prop = schema.properties[name];
+    const wrapper = document.createElement("div");
+    wrapper.className = "col-md-4";
+
+    const label = document.createElement("label");
+    label.className = "form-label";
+    label.textContent = name;
+
+    const help = document.createElement("div");
+    help.className = "form-text";
+    help.textContent = prop.description || "";
+
+    let input;
+
+    // Handle enums
+    if (prop.enum) {
+      input = document.createElement("select");
+      input.className = "form-select form-select-sm";
+      prop.enum.forEach(v => {
+        const opt = document.createElement("option");
+        opt.value = v;
+        opt.textContent = v;
+        input.appendChild(opt);
+      });
+      if (prop.default !== undefined && prop.default !== null) input.value = prop.default;
+    }
+    // boolean
+    else if (prop.type === "boolean") {
+      wrapper.className = "col-md-4";
+      const div = document.createElement("div");
+      div.className = "form-check mt-4";
+
+      input = document.createElement("input");
+      input.type = "checkbox";
+      input.className = "form-check-input";
+      input.checked = !!prop.default;
+
+      const lbl = document.createElement("label");
+      lbl.className = "form-check-label";
+      lbl.textContent = name;
+
+      div.appendChild(input);
+      div.appendChild(lbl);
+      wrapper.appendChild(div);
+      if (prop.description) wrapper.appendChild(help);
+      input.dataset.paramName = name;
+      input.dataset.paramType = "boolean";
+      return wrapper;
+    }
+    // number/integer
+    else if (prop.type === "number" || prop.type === "integer") {
+      input = document.createElement("input");
+      input.type = "number";
+      input.className = "form-control form-control-sm";
+      if (prop.minimum !== undefined) input.min = prop.minimum;
+      if (prop.maximum !== undefined) input.max = prop.maximum;
+      input.step = prop.type === "integer" ? "1" : "any";
+      if (prop.default !== undefined && prop.default !== null) input.value = prop.default;
+    }
+    // array of integers (hidden_layer_sizes)
+    else if (prop.type === "array") {
+      input = document.createElement("input");
+      input.type = "text";
+      input.className = "form-control form-control-sm";
+      input.placeholder = "e.g., 100 or 64,32";
+      if (Array.isArray(prop.default)) input.value = prop.default.join(",");
+    }
+    // anyOf with null or string "auto"
+    else if (prop.anyOf) {
+      input = document.createElement("input");
+      input.type = "text";
+      input.className = "form-control form-control-sm";
+      input.placeholder = "e.g., auto or 10 or null";
+      if (prop.default !== undefined) input.value = String(prop.default);
+    }
+    // string fallback
+    else {
+      input = document.createElement("input");
+      input.type = "text";
+      input.className = "form-control form-control-sm";
+      if (prop.default !== undefined && prop.default !== null) input.value = prop.default;
+    }
+
+    input.dataset.paramName = name;
+    input.dataset.paramType = prop.type || "string";
+
+    wrapper.appendChild(label);
+    wrapper.appendChild(input);
+    if (prop.description) wrapper.appendChild(help);
+    return wrapper;
+  }
+
+  function renderHyperparams(useDefaults=true) {
+    area.innerHTML = "";
+    const algo = currentAlgo();
+    if (!algo) return;
+
+    const schema = algo.hyperparameter_schema || {};
+    const props = schema.properties || {};
+    const required = new Set(schema.required || []);
+    const defaults = algo.default_hyperparameters || {};
+
+    Object.keys(props).forEach((name) => {
+      // Use schema default; if missing, use algorithm defaults
+      if (useDefaults && props[name].default === undefined && defaults[name] !== undefined) {
+        props[name].default = defaults[name];
+      }
+      const inputWrap = makeInput(name, schema);
+      if (required.has(name)) {
+        const badge = document.createElement("span");
+        badge.className = "badge bg-danger ms-2";
+        badge.textContent = "required";
+        const lbl = inputWrap.querySelector(".form-label");
+        if (lbl) lbl.appendChild(badge);
+      }
+      area.appendChild(inputWrap);
+    });
+  }
+
+  function collectHyperparams() {
+    const algo = currentAlgo();
+    if (!algo) return {};
+
+    const schema = algo.hyperparameter_schema || {};
+    const props = schema.properties || {};
+    const out = {};
+
+    const inputs = area.querySelectorAll("[data-param-name]");
+    inputs.forEach((el) => {
+      const name = el.dataset.paramName;
+      const prop = props[name] || {};
+      if (el.type === "checkbox") {
+        out[name] = el.checked;
+        return;
+      }
+
+      const raw = el.value.trim();
+      if (raw === "") return; // omit empty -> schema may allow missing
+
+      // array
+      if (prop.type === "array") {
+        out[name] = raw.split(",").map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n));
+        return;
+      }
+
+      // numeric types
+      if (prop.type === "integer") {
+        const v = parseInt(raw, 10);
+        if (!Number.isFinite(v)) return;
+        out[name] = v;
+        return;
+      }
+      if (prop.type === "number") {
+        const v = parseFloat(raw);
+        if (!Number.isFinite(v)) return;
+        out[name] = v;
+        return;
+      }
+
+      // anyOf: accept "null"
+      if (prop.anyOf) {
+        if (raw.toLowerCase() === "null") out[name] = null;
+        else if (!isNaN(Number(raw))) out[name] = Number(raw);
+        else out[name] = raw;
+        return;
+      }
+
+      // enum / string
+      out[name] = raw;
+    });
+
+    return out;
+  }
+
+  algoSelect.addEventListener("change", () => renderHyperparams(true));
+  resetBtn.addEventListener("click", () => renderHyperparams(true));
+
+  expForm.addEventListener("submit", () => {
+    const hp = collectHyperparams();
+    hyperJsonEl.value = JSON.stringify(hp);
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · ML Platform{% endblock %}
+
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0">Dashboard</h2>
+    <a class="btn btn-primary" href="{% url 'dataset_upload' %}">Upload Dataset</a>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-4">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Recent Projects</div>
+        <div class="card-body">
+          {% if projects %}
+            <ul class="list-group">
+              {% for p in projects %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <a href="{% url 'project_detail' project_id=p.id %}">{{ p.name }}</a>
+                  <small class="text-muted">{{ p.updated_at|date:"Y-m-d H:i" }}</small>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="text-muted">No projects yet. Create one from Admin or upload a dataset into a new project.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Recent Datasets</div>
+        <div class="card-body">
+          {% if recent_datasets %}
+            <ul class="list-group">
+              {% for d in recent_datasets %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <a href="{% url 'dataset_detail' dataset_id=d.id %}">{{ d.name }}</a>
+                  <small class="text-muted">{{ d.updated_at|date:"Y-m-d H:i" }}</small>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="text-muted">No datasets yet.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Recent Experiments</div>
+        <div class="card-body">
+          {% if recent_experiments %}
+            <ul class="list-group">
+              {% for e in recent_experiments %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <a href="{% url 'experiment_results' experiment_id=e.id %}">{{ e.name }}</a>
+                  <span class="badge bg-secondary">{{ e.status }}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="text-muted">No experiments yet.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
