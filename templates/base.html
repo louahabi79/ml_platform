@@ -26,12 +26,20 @@
               <li class="nav-item">
                 <span class="navbar-text me-3">Hello, {{ user.username }}</span>
               </li>
+
+              <!-- Django 5 logout requires POST -->
               <li class="nav-item">
-                <a class="nav-link" href="/admin/logout/">Logout</a>
+                <form method="post" action="{% url 'logout' %}" class="d-inline">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-sm btn-outline-light">Logout</button>
+                </form>
               </li>
             {% else %}
+              <li class="nav-item me-2">
+                <a class="btn btn-sm btn-outline-light" href="{% url 'login' %}">Login</a>
+              </li>
               <li class="nav-item">
-                <a class="nav-link" href="/admin/login/">Login</a>
+                <a class="btn btn-sm btn-warning" href="{% url 'signup' %}">Sign up</a>
               </li>
             {% endif %}
           </ul>
@@ -50,7 +58,6 @@
           </ul>
         </div>
       {% endif %}
-
       {% block content %}{% endblock %}
     </main>
 

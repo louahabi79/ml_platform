@@ -1,41 +1,45 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import pandas as pd
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.http import FileResponse, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse
-from django.views.decorators.http import require_http_methods
-
-from apps.datasets.models import Project, Dataset, DatasetVersion
-from apps.ml_models.models import Algorithm, Pipeline, PipelineStep, Experiment, MLTaskType, ModelArtifact, EvaluationResult
-from apps.api.v1.serializers import PipelineStepSerializer, ExperimentSerializer, PipelineSerializer
-from apps.ml_models.services.experiment_service import run_experiment_threaded
-
-from apps.visualization.services import generate_dataset_plots
-from apps.visualization.models import PlotArtifact
-
 from django.views.decorators.http import require_http_methods
 from rest_framework.exceptions import ValidationError as DRFValidationError
 
+from apps.datasets.models import Project, Dataset, DatasetVersion
+from apps.ml_models.models import Algorithm, Pipeline, PipelineStep, Experiment, MLTaskType, ModelArtifact, EvaluationResult, ManualFeature
+from apps.api.v1.serializers import PipelineStepSerializer, ExperimentSerializer, PipelineSerializer
+from apps.ml_models.services.experiment_service import run_experiment_threaded
+from apps.visualization.services import generate_dataset_plots, plot_project_model_comparison
+from apps.visualization.models import PlotArtifact
 from apps.ml_models.services.predict_service import predict_csv_for_experiment
 from apps.ml_models.services.report_generator import generate_experiment_report_pdf
-
 
 
 def _ensure_owner(obj, user):
     owner_id = getattr(obj, "owner_id", None)
     if owner_id is None:
-        # dataset_version -> dataset -> owner
         if hasattr(obj, "dataset") and getattr(obj.dataset, "owner_id", None) != user.id:
             raise PermissionDenied
         return
     if owner_id != user.id:
         raise PermissionDenied
+
+
+def _plot_url(plot: PlotArtifact) -> str | None:
+    if hasattr(plot, "image_file") and getattr(plot, "image_file", None):
+        return plot.image_file.url
+    # Fallbacks
+    if hasattr(plot, "image") and getattr(plot, "image", None):
+        return plot.image.url
+    if hasattr(plot, "file") and getattr(plot, "file", None):
+        return plot.file.url
+    return None
 
 
 @login_required
@@ -65,6 +69,59 @@ def project_detail(request: HttpRequest, project_id: int) -> HttpResponse:
 
 
 @login_required
+def project_comparison(request: HttpRequest, project_id: int) -> HttpResponse:
+    """
+    Renders a model comparison bar chart and a metrics table for all experiments in a project.
+    """
+    project = get_object_or_404(Project, id=project_id, owner=request.user)
+
+    # Generate/update comparison plot (Accuracy for classification, R2 for regression)
+    plot_obj = plot_project_model_comparison(project=project, owner=request.user)
+
+    plot_url = _plot_url(plot_obj) if plot_obj else None
+
+    experiments = (
+        Experiment.objects.filter(project=project, owner=request.user)
+        .select_related("algorithm", "pipeline")
+        .order_by("-created_at")
+    )
+
+    rows = []
+    for e in experiments:
+        ev = EvaluationResult.objects.filter(experiment=e).first()
+        metrics = (ev.metrics if ev and isinstance(ev.metrics, dict) else {})
+        test = metrics.get("test", {}) if isinstance(metrics, dict) else {}
+
+        primary_metric = None
+        if e.pipeline.task_type == MLTaskType.CLASSIFICATION:
+            primary_metric = test.get("accuracy")
+        elif e.pipeline.task_type == MLTaskType.REGRESSION:
+            primary_metric = test.get("r2")
+
+        rows.append({
+            "id": e.id,
+            "name": e.name,
+            "algorithm": e.algorithm.display_name,
+            "task": e.pipeline.task_type,
+            "status": e.status,
+            "accuracy": test.get("accuracy"),
+            "f1_macro": test.get("f1_macro"),
+            "precision_macro": test.get("precision_macro"),
+            "recall_macro": test.get("recall_macro"),
+            "rmse": test.get("rmse"),
+            "mae": test.get("mae"),
+            "r2": test.get("r2"),
+            "primary": primary_metric,
+        })
+
+    return render(request, "projects/comparison.html", {
+        "project": project,
+        "plot_url": plot_url,
+        "rows": rows,
+    })
+
+
+@login_required
 @require_http_methods(["GET", "POST"])
 def dataset_upload(request: HttpRequest) -> HttpResponse:
     projects = Project.objects.filter(owner=request.user).order_by("-updated_at")
@@ -84,6 +141,11 @@ def dataset_upload(request: HttpRequest) -> HttpResponse:
         errors["dataset_name"] = "Dataset name is required."
     if not file:
         errors["file"] = "CSV file is required."
+
+    # 20MB hard limit (also enforced in settings)
+    MAX_CSV_MB = 20
+    if file and file.size > MAX_CSV_MB * 1024 * 1024:
+        errors["file"] = f"CSV too large (max {MAX_CSV_MB}MB)."
 
     if errors:
         return render(request, "datasets/upload.html", {"projects": projects, "errors": errors})
@@ -123,7 +185,7 @@ def dataset_upload(request: HttpRequest) -> HttpResponse:
         notes="",
     )
 
-    # Basic profiling now (real, no placeholders)
+    # Profile now (real)
     df = pd.read_csv(dv.file.path)
     dv.row_count = int(df.shape[0])
     dv.column_count = int(df.shape[1])
@@ -133,7 +195,10 @@ def dataset_upload(request: HttpRequest) -> HttpResponse:
         "unique_by_column": {c: int(df[c].nunique(dropna=True)) for c in df.columns},
     }
     dv.save(update_fields=["row_count", "column_count", "schema_json", "profile_json"])
+
+    # Generate dataset plots (PNG)
     generate_dataset_plots(dataset_version=dv, df=df, owner=request.user, project=project)
+
     return redirect("dataset_version_detail", version_id=dv.id)
 
 
@@ -146,15 +211,42 @@ def dataset_detail(request: HttpRequest, dataset_id: int) -> HttpResponse:
 
 @login_required
 def dataset_version_detail(request: HttpRequest, version_id: int) -> HttpResponse:
+    """
+    FIXED:
+    - Builds row_data = [{'name','dtype','missing','unique'}, ...]
+    - Fetches dataset plots (distributions + correlation heatmap) and passes URLs to template.
+    """
     dv = get_object_or_404(DatasetVersion, id=version_id)
     _ensure_owner(dv, request.user)
 
     columns = (dv.schema_json or {}).get("columns", [])
     profile = dv.profile_json or {}
+    missing_by = profile.get("missing_by_column", {}) or {}
+    unique_by = profile.get("unique_by_column", {}) or {}
+
+    row_data = []
+    for c in columns:
+        name = c.get("name")
+        dtype = c.get("dtype")
+        row_data.append({
+            "name": name,
+            "dtype": dtype,
+            "missing": int(missing_by.get(name, 0)),
+            "unique": int(unique_by.get(name, 0)),
+        })
+
+    # Fetch dataset-level plots (experiment is null)
+    plots = PlotArtifact.objects.filter(dataset_version=dv, experiment__isnull=True)
+    dv_plot_map: Dict[str, str] = {}
+    for p in plots:
+        url = _plot_url(p)
+        if url:
+            dv_plot_map[p.plot_type] = url
+
     return render(request, "datasets/version_detail.html", {
         "dv": dv,
-        "columns": columns,
-        "profile": profile,
+        "row_data": row_data,
+        "dv_plot_map": dv_plot_map,
     })
 
 
@@ -168,11 +260,16 @@ def pipeline_wizard(request: HttpRequest, version_id: int) -> HttpResponse:
     project = dataset.project
     _ensure_owner(project, request.user)
 
-    # Columns list (prefer schema_json; fallback to reading csv)
     cols = [c["name"] for c in (dv.schema_json or {}).get("columns", [])]
     if not cols:
         df = pd.read_csv(dv.file.path, nrows=5)
         cols = list(df.columns)
+
+    task_types = [
+        {"value": MLTaskType.REGRESSION, "label": "Regression"},
+        {"value": MLTaskType.CLASSIFICATION, "label": "Classification"},
+        {"value": MLTaskType.CLUSTERING, "label": "Clustering"},
+    ]
 
     if request.method == "GET":
         return render(request, "pipelines/wizard.html", {
@@ -180,18 +277,15 @@ def pipeline_wizard(request: HttpRequest, version_id: int) -> HttpResponse:
             "dataset": dataset,
             "dv": dv,
             "columns": cols,
-            "task_types": [
-                {"value": MLTaskType.REGRESSION, "label": "Regression"},
-                {"value": MLTaskType.CLASSIFICATION, "label": "Classification"},
-                {"value": MLTaskType.CLUSTERING, "label": "Clustering"},
-            ],
+            "task_types": task_types,
         })
 
-    # POST: create Pipeline + steps from JSON payload
     name = (request.POST.get("pipeline_name") or "").strip()
     task_type = request.POST.get("task_type") or ""
     target_column = (request.POST.get("target_column") or "").strip()
     steps_json = request.POST.get("steps_json") or "[]"
+    feature_columns_json = request.POST.get("feature_columns_json") or "[]"
+    manual_features_json = request.POST.get("manual_features_json") or "[]"
 
     errors = {}
     if not name:
@@ -208,35 +302,49 @@ def pipeline_wizard(request: HttpRequest, version_id: int) -> HttpResponse:
     except Exception:
         errors["steps_json"] = "Invalid steps JSON."
 
+    try:
+        feature_cols = json.loads(feature_columns_json)
+        if not isinstance(feature_cols, list):
+            raise ValueError
+    except Exception:
+        errors["feature_columns_json"] = "Invalid feature columns JSON."
+        feature_cols = []
+
+    try:
+        manual_defs = json.loads(manual_features_json)
+        if not isinstance(manual_defs, list):
+            raise ValueError
+    except Exception:
+        errors["manual_features_json"] = "Invalid manual features JSON."
+        manual_defs = []
+
+    # Ensure target column isn't included as a feature for supervised
+    if task_type in (MLTaskType.REGRESSION, MLTaskType.CLASSIFICATION) and target_column:
+        feature_cols = [c for c in feature_cols if c != target_column]
+
     if errors:
         return render(request, "pipelines/wizard.html", {
             "project": project,
             "dataset": dataset,
             "dv": dv,
             "columns": cols,
-            "task_types": [
-                {"value": MLTaskType.REGRESSION, "label": "Regression"},
-                {"value": MLTaskType.CLASSIFICATION, "label": "Classification"},
-                {"value": MLTaskType.CLUSTERING, "label": "Clustering"},
-            ],
+            "task_types": task_types,
             "errors": errors,
         })
 
-    # Create pipeline
     pipeline_data = {
         "project": project.id,
         "dataset_version": dv.id,
         "name": name,
         "task_type": task_type,
         "target_column": target_column if task_type != MLTaskType.CLUSTERING else "",
-        "feature_columns": [],  # Phase 6 wizard uses default: all except target
+        "feature_columns": feature_cols,  # now supported by UI
         "random_seed": 42,
     }
     pser = PipelineSerializer(data=pipeline_data)
     pser.is_valid(raise_exception=True)
     pipeline = pser.save(owner=request.user)
 
-    # Create steps via serializer (polymorphic validation)
     for idx, step in enumerate(steps_payload):
         sdata = {
             "pipeline": pipeline.id,
@@ -249,6 +357,13 @@ def pipeline_wizard(request: HttpRequest, version_id: int) -> HttpResponse:
         sser.is_valid(raise_exception=True)
         sser.save()
 
+    # Save manual features (Safe evaluation happens in service during training)
+    for mf in manual_defs:
+        n = (mf.get("name") or "").strip()
+        expr = (mf.get("expression") or "").strip()
+        if n and expr:
+            ManualFeature.objects.create(pipeline=pipeline, name=n, expression=expr)
+
     return redirect("pipeline_detail", pipeline_id=pipeline.id)
 
 
@@ -256,7 +371,8 @@ def pipeline_wizard(request: HttpRequest, version_id: int) -> HttpResponse:
 def pipeline_detail(request: HttpRequest, pipeline_id: int) -> HttpResponse:
     pipeline = get_object_or_404(Pipeline, id=pipeline_id, owner=request.user)
     steps = PipelineStep.objects.filter(pipeline=pipeline).order_by("order")
-    return render(request, "pipelines/detail.html", {"pipeline": pipeline, "steps": steps})
+    mfs = ManualFeature.objects.filter(pipeline=pipeline).order_by("created_at") if hasattr(ManualFeature, "created_at") else ManualFeature.objects.filter(pipeline=pipeline)
+    return render(request, "pipelines/detail.html", {"pipeline": pipeline, "steps": steps, "manual_features": mfs})
 
 
 @login_required
@@ -266,7 +382,6 @@ def experiment_create(request: HttpRequest, pipeline_id: int) -> HttpResponse:
     algorithms = Algorithm.objects.all().order_by("family", "display_name")
 
     if request.method == "GET":
-        # Provide schemas to JS
         algo_payload = []
         for a in algorithms:
             algo_payload.append({
@@ -285,7 +400,6 @@ def experiment_create(request: HttpRequest, pipeline_id: int) -> HttpResponse:
             "task_type": pipeline.task_type,
         })
 
-    # POST
     name = (request.POST.get("name") or "").strip()
     algorithm_id = request.POST.get("algorithm_id")
     use_cv = request.POST.get("use_cross_validation") == "on"
@@ -305,9 +419,9 @@ def experiment_create(request: HttpRequest, pipeline_id: int) -> HttpResponse:
             raise ValueError
     except Exception:
         errors["hyperparameters_json"] = "Invalid hyperparameters JSON."
+        hyperparams = {}
 
     if errors:
-        # re-render with schemas
         algo_payload = []
         for a in algorithms:
             algo_payload.append({
@@ -346,38 +460,34 @@ def experiment_create(request: HttpRequest, pipeline_id: int) -> HttpResponse:
     ser.is_valid(raise_exception=True)
     exp = ser.save(owner=request.user)
 
-    # MVP strategy: threaded so SSR doesn’t block
     run_experiment_threaded(exp.id)
-
     return redirect("experiment_results", experiment_id=exp.id)
 
 
 @login_required
 def experiment_results(request: HttpRequest, experiment_id: int) -> HttpResponse:
-    exp = get_object_or_404(Experiment.objects.select_related("algorithm", "pipeline"), id=experiment_id, owner=request.user)
+    exp = get_object_or_404(
+        Experiment.objects.select_related("algorithm", "pipeline", "project"),
+        id=experiment_id,
+        owner=request.user,
+    )
     evaluation = EvaluationResult.objects.filter(experiment=exp).first()
     artifact = ModelArtifact.objects.filter(experiment=exp).first()
 
     metrics = evaluation.metrics if evaluation else {}
     confusion = evaluation.confusion_matrix if evaluation else {}
 
-    # Flatten metrics for table rendering
     test_metrics = metrics.get("test", {}) if isinstance(metrics, dict) else {}
     cv_metrics = metrics.get("cv", {}) if isinstance(metrics, dict) else {}
 
     cm_matrix = (confusion or {}).get("matrix", [])
-    
-    # --- VISUALIZATION LOGIC ---
+
     plots = PlotArtifact.objects.filter(experiment=exp).order_by("created_at")
-    plot_map = {}
+    plot_map: Dict[str, str] = {}
     for p in plots:
-        # Support either p.image or p.file (our model uses image_file field actually)
-        if hasattr(p, "image_file") and p.image_file:
-             plot_map[p.plot_type] = p.image_file.url
-        elif hasattr(p, "image") and p.image:
-            plot_map[p.plot_type] = p.image.url
-        elif hasattr(p, "file") and p.file:
-            plot_map[p.plot_type] = p.file.url
+        url = _plot_url(p)
+        if url:
+            plot_map[p.plot_type] = url
 
     return render(request, "experiments/results.html", {
         "exp": exp,
@@ -396,20 +506,18 @@ def download_model(request: HttpRequest, experiment_id: int) -> HttpResponse:
     artifact = get_object_or_404(ModelArtifact, experiment=exp)
     return FileResponse(artifact.file.open("rb"), as_attachment=True, filename=artifact.file.name.split("/")[-1])
 
+
 @login_required
 @require_http_methods(["GET", "POST"])
 def predict_view(request: HttpRequest, experiment_id: int) -> HttpResponse:
-    exp = get_object_or_404(Experiment.objects.select_related("project"), id=experiment_id, owner=request.user)
+    exp = get_object_or_404(Experiment.objects.select_related("project", "algorithm"), id=experiment_id, owner=request.user)
 
     if request.method == "GET":
         return render(request, "experiments/predict.html", {"exp": exp})
 
     file = request.FILES.get("file")
     if not file:
-        return render(request, "experiments/predict.html", {
-            "exp": exp,
-            "errors": {"file": "CSV file is required."}
-        })
+        return render(request, "experiments/predict.html", {"exp": exp, "errors": {"file": "CSV file is required."}})
 
     try:
         csv_bytes = predict_csv_for_experiment(exp, file)
@@ -423,6 +531,7 @@ def predict_view(request: HttpRequest, experiment_id: int) -> HttpResponse:
     resp = HttpResponse(csv_bytes, content_type="text/csv; charset=utf-8")
     resp["Content-Disposition"] = f'attachment; filename="{filename}"'
     return resp
+
 
 @login_required
 def download_report_pdf(request: HttpRequest, experiment_id: int) -> HttpResponse:

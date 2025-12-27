@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 import numpy as np
 import pandas as pd
 
 import matplotlib
-matplotlib.use("Agg")  # server-side rendering backend
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -18,27 +17,20 @@ from django.utils import timezone
 from sklearn.model_selection import learning_curve
 
 from apps.visualization.models import PlotArtifact
-from apps.ml_models.models import Experiment, MLTaskType
+from apps.ml_models.models import Experiment, MLTaskType, EvaluationResult
 from apps.datasets.models import DatasetVersion
 
 
-# ---------- Robust save helpers (supports either image/file field names) ----------
-
 def _save_png_to_plot(plot: PlotArtifact, filename: str, png_bytes: bytes) -> None:
-    """
-    Saves PNG bytes to the model's image_file field.
-    """
     content = ContentFile(png_bytes, name=filename)
-    # The model from Phase 2 uses 'image_file'
     if hasattr(plot, "image_file"):
         plot.image_file.save(filename, content, save=True)
-    # Fallback for safety
     elif hasattr(plot, "image"):
         plot.image.save(filename, content, save=True)
     elif hasattr(plot, "file"):
         plot.file.save(filename, content, save=True)
     else:
-        raise AttributeError("PlotArtifact must have 'image_file', 'image', or 'file' field.")
+        raise AttributeError("PlotArtifact must have 'image_file', 'image', or 'file'.")
 
 def _fig_to_png_bytes(fig) -> bytes:
     buf = io.BytesIO()
@@ -59,9 +51,13 @@ def _upsert_plot(
     png_bytes: bytes,
 ) -> PlotArtifact:
     """
-    Idempotent: update_or_create by (experiment, plot_type) or (dataset_version, plot_type).
+    Supports 3 scopes:
+    - Experiment plot: keyed by (experiment, plot_type)
+    - DatasetVersion plot: keyed by (dataset_version, plot_type) where experiment is null
+    - Project plot: keyed by (project, plot_type) where both experiment and dataset_version are null
     """
     metadata = metadata or {}
+
     defaults = {
         "owner": owner,
         "project": project,
@@ -70,7 +66,6 @@ def _upsert_plot(
         "created_at": timezone.now(),
     }
 
-    # Choose unique key scope: experiment plots or dataset plots
     if experiment is not None:
         plot, _ = PlotArtifact.objects.update_or_create(
             experiment=experiment,
@@ -78,13 +73,26 @@ def _upsert_plot(
             defaults={**defaults, "dataset_version": dataset_version},
         )
         fname = f"exp_{experiment.id}_{plot_type}.png"
-    else:
+
+    elif dataset_version is not None:
         plot, _ = PlotArtifact.objects.update_or_create(
             dataset_version=dataset_version,
+            experiment=None,
             plot_type=plot_type,
-            defaults={**defaults, "experiment": None},
+            defaults={**defaults},
         )
         fname = f"dv_{dataset_version.id}_{plot_type}.png"
+
+    else:
+        # Project-level plot
+        plot, _ = PlotArtifact.objects.update_or_create(
+            project=project,
+            experiment=None,
+            dataset_version=None,
+            plot_type=plot_type,
+            defaults={**defaults},
+        )
+        fname = f"project_{project.id}_{plot_type}.png"
 
     _save_png_to_plot(plot, fname, png_bytes)
     return plot
@@ -100,10 +108,6 @@ def plot_numeric_distributions(
     project,
     max_cols: int = 12,
 ) -> Optional[PlotArtifact]:
-    """
-    Histograms for numerical columns in a single grid PNG.
-    Returns PlotArtifact or None if no numeric columns exist.
-    """
     num_cols = list(df.select_dtypes(include=["number", "bool"]).columns)
     if not num_cols:
         return None
@@ -124,7 +128,6 @@ def plot_numeric_distributions(
         ax.set_xlabel(col, fontsize=9)
         ax.set_ylabel("Count", fontsize=9)
 
-    # Hide unused axes
     for j in range(n, len(axes)):
         axes[j].axis("off")
 
@@ -148,15 +151,10 @@ def plot_correlation_heatmap(
     project,
     max_cols: int = 20,
 ) -> Optional[PlotArtifact]:
-    """
-    Correlation matrix heatmap for numeric columns.
-    Returns PlotArtifact or None if insufficient numeric columns.
-    """
     num_df = df.select_dtypes(include=["number", "bool"])
     if num_df.shape[1] < 2:
         return None
 
-    # limit columns for readability
     if num_df.shape[1] > max_cols:
         num_df = num_df.iloc[:, :max_cols]
 
@@ -180,9 +178,6 @@ def plot_correlation_heatmap(
 
 
 def generate_dataset_plots(dataset_version: DatasetVersion, df: pd.DataFrame, owner, project) -> Dict[str, Any]:
-    """
-    Creates dataset-level plots and returns created plot ids/urls info.
-    """
     outputs = {"created": []}
     p1 = plot_numeric_distributions(dataset_version=dataset_version, df=df, owner=owner, project=project)
     if p1:
@@ -205,9 +200,6 @@ def plot_actual_vs_predicted(
     owner,
     project,
 ) -> PlotArtifact:
-    """
-    Regression: scatter plot of y_true vs y_pred with y=x reference line.
-    """
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
 
@@ -242,9 +234,6 @@ def plot_confusion_matrix_heatmap(
     owner,
     project,
 ) -> PlotArtifact:
-    """
-    Classification: confusion matrix heatmap.
-    """
     fig = plt.figure(figsize=(7, 6))
     ax = fig.add_subplot(111)
     sns.heatmap(cm, annot=True, fmt="d", ax=ax, cbar=False)
@@ -280,9 +269,6 @@ def plot_learning_curve(
     owner,
     project,
 ) -> PlotArtifact:
-    """
-    Learning curve: training vs validation score across train sizes, using CV.
-    """
     train_sizes = np.linspace(0.1, 1.0, 5)
 
     sizes, train_scores, val_scores = learning_curve(
@@ -321,13 +307,69 @@ def plot_learning_curve(
         dataset_version=experiment.dataset_version,
         plot_type="exp_learning_curve",
         title="Learning Curve",
-        metadata={
-            "scoring": scoring,
-            "train_sizes": [int(x) for x in sizes],
-            "train_mean": [float(x) for x in train_mean],
-            "train_std": [float(x) for x in train_std],
-            "val_mean": [float(x) for x in val_mean],
-            "val_std": [float(x) for x in val_std],
-        },
+        metadata={"scoring": scoring},
+        png_bytes=png,
+    )
+
+
+# ------------------------ Project Comparison Plot (REQUIRED) ------------------------
+
+def plot_project_model_comparison(*, project, owner) -> Optional[PlotArtifact]:
+    """
+    Bar chart comparing experiments in a project by primary test metric:
+      - Classification -> Accuracy
+      - Regression -> R2
+    Stores a project-level PlotArtifact: (project, plot_type='project_model_comparison', experiment=None, dataset_version=None)
+    """
+    exps = (
+        Experiment.objects.filter(project=project, owner=owner)
+        .select_related("pipeline", "algorithm")
+        .order_by("created_at")
+    )
+    labels: List[str] = []
+    values: List[float] = []
+    metric_name = None
+
+    for e in exps:
+        ev = EvaluationResult.objects.filter(experiment=e).first()
+        if not ev or not isinstance(ev.metrics, dict):
+            continue
+        test = ev.metrics.get("test", {}) if isinstance(ev.metrics, dict) else {}
+
+        if e.pipeline.task_type == MLTaskType.CLASSIFICATION:
+            v = test.get("accuracy", None)
+            metric_name = "accuracy"
+        elif e.pipeline.task_type == MLTaskType.REGRESSION:
+            v = test.get("r2", None)
+            metric_name = "r2"
+        else:
+            continue
+
+        if v is None:
+            continue
+
+        labels.append(f"{e.algorithm.display_name} #{e.id}")
+        values.append(float(v))
+
+    if not values:
+        return None
+
+    fig = plt.figure(figsize=(10, 5))
+    ax = fig.add_subplot(111)
+    ax.bar(range(len(values)), values)
+    ax.set_title(f"Model Comparison ({metric_name})")
+    ax.set_ylabel(metric_name)
+    ax.set_xticks(range(len(values)))
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+
+    png = _fig_to_png_bytes(fig)
+    return _upsert_plot(
+        owner=owner,
+        project=project,
+        dataset_version=None,
+        experiment=None,
+        plot_type="project_model_comparison",
+        title=f"Project Model Comparison ({metric_name})",
+        metadata={"metric": metric_name, "count": len(values)},
         png_bytes=png,
     )

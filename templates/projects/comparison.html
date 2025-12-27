@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Model Comparison · ML Platform{% endblock %}
+
+{% block content %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h2 class="mb-0">Model Comparison</h2>
+      <div class="text-muted">Project: <span class="fw-semibold">{{ project.name }}</span></div>
+    </div>
+    <a class="btn btn-outline-secondary" href="{% url 'project_detail' project_id=project.id %}">Back</a>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Comparison Chart</div>
+        <div class="card-body">
+          {% if plot_url %}
+            <img class="img-fluid rounded border" src="{{ plot_url }}" alt="Model comparison chart">
+          {% else %}
+            <div class="text-muted">No completed experiments with metrics yet.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Experiments Metrics</div>
+        <div class="card-body">
+          {% if rows %}
+            <div class="table-responsive">
+              <table class="table table-sm align-middle">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Algorithm</th>
+                    <th>Task</th>
+                    <th>Status</th>
+                    <th>Primary</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for r in rows %}
+                    <tr>
+                      <td>{{ r.id }}</td>
+                      <td><a href="{% url 'experiment_results' experiment_id=r.id %}">{{ r.name }}</a></td>
+                      <td>{{ r.algorithm }}</td>
+                      <td><span class="badge bg-secondary">{{ r.task }}</span></td>
+                      <td>{{ r.status }}</td>
+                      <td><code>{{ r.primary }}</code></td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+
+            <div class="small text-muted">
+              Primary metric is Accuracy for Classification and R² for Regression.
+            </div>
+          {% else %}
+            <div class="text-muted">No experiments yet.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

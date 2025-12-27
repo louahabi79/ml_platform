@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Sign up · ML Platform{% endblock %}
+
+{% block content %}
+  <div class="row justify-content-center">
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Create an account</div>
+        <div class="card-body">
+          <form method="post" class="vstack gap-3">
+            {% csrf_token %}
+
+            {% if form.non_field_errors %}
+              <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+            {% endif %}
+
+            <div>
+              <label class="form-label">Username</label>
+              {{ form.username }}
+              {% if form.username.errors %}<div class="text-danger small">{{ form.username.errors }}</div>{% endif %}
+            </div>
+
+            <div>
+              <label class="form-label">Password</label>
+              {{ form.password1 }}
+              {% if form.password1.errors %}<div class="text-danger small">{{ form.password1.errors }}</div>{% endif %}
+            </div>
+
+            <div>
+              <label class="form-label">Confirm Password</label>
+              {{ form.password2 }}
+              {% if form.password2.errors %}<div class="text-danger small">{{ form.password2.errors }}</div>{% endif %}
+            </div>
+
+            <button class="btn btn-primary" type="submit">Sign up</button>
+
+            <div class="text-muted small">
+              Already have an account? <a href="{% url 'login' %}">Login</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    /* Make Django form widgets Bootstrap-friendly */
+    input { width: 100%; padding: .375rem .75rem; border: 1px solid #ced4da; border-radius: .375rem; }
+  </style>
+{% endblock %}

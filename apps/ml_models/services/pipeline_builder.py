@@ -14,6 +14,7 @@ from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler,
 from sklearn.feature_selection import VarianceThreshold
 
 from apps.ml_models.models import Pipeline, PipelineStep, PipelineStepType, MLTaskType
+from apps.ml_models.services.manual_features import apply_manual_features_to_df
 
 
 @dataclass(frozen=True)
@@ -36,31 +37,23 @@ def _get_steps(pipeline_obj: Pipeline) -> QuerySet[PipelineStep]:
     return PipelineStep.objects.filter(pipeline=pipeline_obj, enabled=True).order_by("order", "id")
 
 
-def _build_imputer_configs(step: PipelineStep) -> Tuple[Optional[SimpleImputer], Optional[SimpleImputer], dict]:
-    """
-    Returns (numeric_imputer, categorical_imputer, df_level_ops)
-    df_level_ops handles drop_rows/drop_columns strategies.
-    """
+def _build_imputer_configs(step: PipelineStep):
     cfg = step.config or {}
     strategy = cfg.get("strategy")
     fill_value = cfg.get("fill_value", None)
     cols = cfg.get("columns") or []
-    df_ops = {"drop_rows": False, "drop_columns": []}  # columns to drop
+    df_ops = {"drop_rows": False, "drop_columns": []}
 
     if strategy in ("drop_rows", "drop_columns"):
         if strategy == "drop_rows":
             df_ops["drop_rows"] = True
         else:
-            # if columns specified, drop them; else drop any column with missing values (applied later)
             df_ops["drop_columns"] = cols
         return None, None, df_ops
 
-    # Numeric imputer
     if strategy in ("mean", "median"):
         num_imp = SimpleImputer(strategy=strategy)
-        # Categorical can't do mean/median → fallback
-        cat_strategy = "most_frequent"
-        cat_imp = SimpleImputer(strategy=cat_strategy)
+        cat_imp = SimpleImputer(strategy="most_frequent")
     elif strategy == "most_frequent":
         num_imp = SimpleImputer(strategy="most_frequent")
         cat_imp = SimpleImputer(strategy="most_frequent")
@@ -79,24 +72,16 @@ def _build_encoder(step: PipelineStep):
     handle_unknown = cfg.get("handle_unknown", "ignore")
 
     if enc == "onehot":
-        # sklearn >= 1.2 uses sparse_output, not sparse
-        return OneHotEncoder(
-            handle_unknown=handle_unknown,
-            sparse_output=False,
-        )
+        return OneHotEncoder(handle_unknown=handle_unknown, sparse_output=False)
     if enc == "ordinal":
-        # For unknown categories, encode as -1
-        return OrdinalEncoder(
-            handle_unknown="use_encoded_value",
-            unknown_value=-1,
-        )
+        return OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
+
     raise ValidationError({"pipeline.encoding.encoder": f"Unsupported encoder: {enc}"})
 
 
 def _build_scaler(step: PipelineStep):
     cfg = step.config or {}
     scaler = cfg.get("scaler")
-
     if scaler == "none":
         return None
     if scaler == "standard":
@@ -122,21 +107,32 @@ def build_sklearn_pipeline(
     estimator,
 ) -> BuiltPipeline:
     """
-    Converts stored PipelineSteps into a fitted-ready sklearn Pipeline:
-      (preprocess ColumnTransformer) -> (optional feature selection) -> estimator
+    Converts stored PipelineSteps into sklearn Pipeline:
+      preprocess(ColumnTransformer) -> optional selector -> estimator
 
-    Notes:
-    - Encoding/scaling/polynomial apply by type (numeric vs categorical).
-    - Missing values drop_rows/drop_columns are handled at DataFrame level before sklearn transformers.
+    REQUIRED UPDATE:
+    - Applies manual features BEFORE splitting X/y.
     """
     if pipeline_obj.task_type in (MLTaskType.REGRESSION, MLTaskType.CLASSIFICATION) and not pipeline_obj.target_column:
         raise ValidationError({"pipeline.target_column": "Target column is required for supervised tasks."})
+
+    # ---- Apply manual features BEFORE splitting X/y ----
+    manual_defs = []
+    if hasattr(pipeline_obj, "manual_features"):
+        for mf in pipeline_obj.manual_features.all():
+            manual_defs.append({"name": mf.name, "expression": mf.expression})
+    if manual_defs:
+        df = apply_manual_features_to_df(df, manual_defs)
 
     # Feature columns: empty means "all except target"
     if pipeline_obj.feature_columns:
         feature_cols = list(pipeline_obj.feature_columns)
     else:
         feature_cols = [c for c in df.columns if c != pipeline_obj.target_column]
+
+    if pipeline_obj.task_type in (MLTaskType.REGRESSION, MLTaskType.CLASSIFICATION):
+        # ensure target excluded
+        feature_cols = [c for c in feature_cols if c != pipeline_obj.target_column]
 
     if not feature_cols:
         raise ValidationError({"pipeline.feature_columns": "No feature columns selected."})
@@ -151,12 +147,10 @@ def build_sklearn_pipeline(
 
     numeric_cols, categorical_cols = _infer_column_types(df, feature_cols)
 
-    # Build per-type transformer lists, driven by ordered steps
     numeric_steps = []
     categorical_steps = []
     df_ops = {"drop_rows": False, "drop_columns": []}
-    use_feature_selection = None  # currently VarianceThreshold only (real, deterministic)
-    feature_selection_cfg = None
+    selector_step = None
 
     steps = list(_get_steps(pipeline_obj))
     for s in steps:
@@ -185,27 +179,20 @@ def build_sklearn_pipeline(
             numeric_steps.append(("poly", poly))
 
         elif s.step_type == PipelineStepType.FEATURE_SELECTION:
-            # Real minimal implementation: VarianceThreshold / none.
             cfg = s.config or {}
             method = cfg.get("method", "none")
             if method == "none":
                 continue
             if method == "variance_threshold":
-                thr = cfg.get("threshold", None)
+                thr = cfg.get("threshold")
                 if thr is None:
                     raise ValidationError({"pipeline.feature_selection.threshold": "Required for variance_threshold."})
-                use_feature_selection = "variance_threshold"
-                feature_selection_cfg = {"threshold": float(thr)}
+                selector_step = ("feature_select", VarianceThreshold(threshold=float(thr)))
             else:
-                # k_best/model_based supported later in a dedicated phase expansion
-                raise ValidationError({"pipeline.feature_selection.method": f"Not yet supported in Phase 5 runner: {method}"})
+                raise ValidationError({"pipeline.feature_selection.method": f"Unsupported in this build: {method}"})
 
         elif s.step_type == PipelineStepType.MANUAL_FEATURES:
-            # Manual features are applied later in Phase 6 (safe expression parsing).
-            # For Phase 5 runner we do not silently ignore: we enforce that there are no manual features yet.
-            # This keeps behavior academically honest and prevents wrong results.
-            if pipeline_obj.manual_features.exists():
-                raise ValidationError({"pipeline.manual_features": "Manual features exist but are not enabled in Phase 5 runner yet."})
+            # manual features already applied at df-level above
             continue
 
     # Apply DF-level missing strategies
@@ -216,23 +203,17 @@ def build_sklearn_pipeline(
         categorical_cols = [c for c in categorical_cols if c not in drop_set]
 
     if df_ops["drop_rows"]:
-        # drop rows where any feature or target (if exists) is missing
         if y is not None:
-            combined = pd.concat([X, y.rename("__target__")], axis=1)
-            combined = combined.dropna(axis=0)
+            combined = pd.concat([X, y.rename("__target__")], axis=1).dropna(axis=0)
             y = combined["__target__"]
             X = combined.drop(columns=["__target__"])
         else:
             X = X.dropna(axis=0)
 
-    if numeric_cols:
-        num_pipe = SkPipeline(steps=numeric_steps) if numeric_steps else "passthrough"
-    else:
-        num_pipe = "drop"
+    # Type pipelines
+    num_pipe = SkPipeline(steps=numeric_steps) if numeric_cols and numeric_steps else ("passthrough" if numeric_cols else "drop")
 
     if categorical_cols:
-        # If encoding is not configured but categorical columns exist, this will fail downstream.
-        # We enforce explicit encoding for clarity.
         has_encoder = any(name == "encoder" for name, _ in categorical_steps)
         if not has_encoder:
             raise ValidationError({"pipeline.encoding": "Categorical columns detected but no ENCODING step configured."})
@@ -250,10 +231,8 @@ def build_sklearn_pipeline(
     )
 
     full_steps = [("preprocess", preprocess)]
-
-    if use_feature_selection == "variance_threshold":
-        selector = VarianceThreshold(threshold=feature_selection_cfg["threshold"])
-        full_steps.append(("feature_select", selector))
+    if selector_step:
+        full_steps.append(selector_step)
 
     full_steps.append(("model", estimator))
 

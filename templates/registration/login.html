@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Login · ML Platform{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-5">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">Login</div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+          
+          {% if form.errors %}
+            <div class="alert alert-danger">Invalid username or password.</div>
+          {% endif %}
+
+          <div class="mb-3">
+            <label class="form-label">Username</label>
+            {{ form.username }}
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Password</label>
+            {{ form.password }}
+          </div>
+
+          <button class="btn btn-primary w-100" type="submit">Login</button>
+          
+          <input type="hidden" name="next" value="{{ next }}" />
+        </form>
+      </div>
+      <div class="card-footer text-muted small text-center">
+        Don't have an account? <a href="{% url 'signup' %}">Sign up</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  /* Fix Django default widget styling */
+  input[type="text"], input[type="password"] {
+    display: block;
+    width: 100%;
+    padding: .375rem .75rem;
+    font-size: 1rem;
+    line-height: 1.5;
+    color: #212529;
+    background-color: #fff;
+    background-clip: padding-box;
+    border: 1px solid #ced4da;
+    border-radius: .25rem;
+  }
+</style>
+{% endblock %}

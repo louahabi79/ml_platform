@@ -19,7 +19,7 @@
         <div class="row g-3">
           <div class="col-md-6">
             <label class="form-label">Pipeline Name</label>
-            <input class="form-control" name="pipeline_name" placeholder="e.g., Baseline Prep v1" required />
+            <input class="form-control" name="pipeline_name" required />
           </div>
 
           <div class="col-md-6">
@@ -41,6 +41,19 @@
             </select>
             <div class="form-text">Required for Regression/Classification. Not used for Clustering.</div>
           </div>
+
+          <div class="col-12">
+            <label class="form-label">Feature Columns</label>
+            <div class="border rounded p-2 bg-white" style="max-height: 180px; overflow:auto;">
+              {% for c in columns %}
+                <div class="form-check">
+                  <input class="form-check-input featureCol" type="checkbox" value="{{ c }}" checked>
+                  <label class="form-check-label">{{ c }}</label>
+                </div>
+              {% endfor %}
+            </div>
+            <div class="form-text">For supervised tasks, the target is excluded automatically.</div>
+          </div>
         </div>
 
         <hr class="my-4" />
@@ -52,7 +65,30 @@
 
         <div id="stepsContainer" class="vstack gap-2"></div>
 
+        <hr class="my-4" />
+
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h5 class="mb-0">Manual Features (Optional)</h5>
+          <button type="button" class="btn btn-outline-primary btn-sm" id="addManualFeatureBtn">+ Add Manual Feature</button>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-sm align-middle" id="manualFeaturesTable">
+            <thead>
+              <tr><th style="width: 25%;">Name</th><th>Expression</th><th style="width: 10%;"></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="form-text">
+          Allowed operators: + - * / ** and functions: log(), sqrt(), exp(), abs(), pow().
+          Example: <code>log(f0 + 1)</code>
+        </div>
+
         <input type="hidden" name="steps_json" id="stepsJson" />
+        <input type="hidden" name="feature_columns_json" id="featureColumnsJson" />
+        <input type="hidden" name="manual_features_json" id="manualFeaturesJson" />
 
         <div class="mt-4 d-flex gap-2">
           <button class="btn btn-success" type="submit">Create Pipeline</button>
@@ -93,6 +129,8 @@
   const stepsContainer = document.getElementById("stepsContainer");
   const stepTemplate = document.getElementById("stepTemplate");
   const stepsJsonEl = document.getElementById("stepsJson");
+  const featureColsJsonEl = document.getElementById("featureColumnsJson");
+  const manualFeaturesJsonEl = document.getElementById("manualFeaturesJson");
   const wizardForm = document.getElementById("wizardForm");
   const taskTypeEl = document.getElementById("taskType");
   const targetBlock = document.getElementById("targetBlock");
@@ -104,9 +142,19 @@
     targetBlock.style.display = supervised ? "" : "none";
     if (!supervised) targetColumnEl.value = "";
   }
-
   taskTypeEl.addEventListener("change", renderTargetVisibility);
   renderTargetVisibility();
+
+  function syncFeatureChecksWithTarget() {
+    const t = taskTypeEl.value;
+    const supervised = (t === "REGRESSION" || t === "CLASSIFICATION");
+    const target = targetColumnEl.value;
+    document.querySelectorAll(".featureCol").forEach(cb => {
+      if (supervised && cb.value === target) cb.checked = false;
+    });
+  }
+  targetColumnEl.addEventListener("change", syncFeatureChecksWithTarget);
+  taskTypeEl.addEventListener("change", syncFeatureChecksWithTarget);
 
   function configHTMLFor(type) {
     if (type === "MISSING_VALUES") {
@@ -132,7 +180,6 @@
             <input class="form-control form-control-sm cfg_columns" placeholder="leave empty for all" />
           </div>
         </div>
-        <div class="form-text">If drop_columns with empty columns, the runner drops only columns you list (recommended).</div>
       `;
     }
     if (type === "ENCODING") {
@@ -247,9 +294,7 @@
     const typeSel = node.querySelector(".stepType");
     const configArea = node.querySelector(".configArea");
 
-    function renderConfig() {
-      configArea.innerHTML = configHTMLFor(typeSel.value);
-    }
+    function renderConfig() { configArea.innerHTML = configHTMLFor(typeSel.value); }
     typeSel.addEventListener("change", renderConfig);
     renderConfig();
 
@@ -264,12 +309,25 @@
 
   document.getElementById("addStepBtn").addEventListener("click", addStep);
 
-  // Add a sensible default set
-  addStep(); // Missing
-  addStep(); // Encoding
-  addStep(); // Scaling
+  // sensible defaults
+  addStep(); addStep(); addStep();
 
-  wizardForm.addEventListener("submit", (e) => {
+  // Manual features
+  const mfTbody = document.querySelector("#manualFeaturesTable tbody");
+  document.getElementById("addManualFeatureBtn").addEventListener("click", () => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input class="form-control form-control-sm mf_name" placeholder="e.g., ratio_1" /></td>
+      <td><input class="form-control form-control-sm mf_expr" placeholder="e.g., log(f0 + 1)" /></td>
+      <td><button type="button" class="btn btn-sm btn-outline-danger mf_remove">Remove</button></td>
+    `;
+    tr.querySelector(".mf_remove").addEventListener("click", () => tr.remove());
+    mfTbody.appendChild(tr);
+  });
+
+  wizardForm.addEventListener("submit", () => {
+    syncFeatureChecksWithTarget();
+
     const steps = [...stepsContainer.children].map((cardEl) => {
       const step_type = cardEl.querySelector(".stepType").value;
       const enabled = cardEl.querySelector(".stepEnabled").checked;
@@ -277,6 +335,17 @@
       return { step_type, enabled, config };
     });
     stepsJsonEl.value = JSON.stringify(steps);
+
+    const selectedFeatures = [...document.querySelectorAll(".featureCol")]
+      .filter(cb => cb.checked)
+      .map(cb => cb.value);
+    featureColsJsonEl.value = JSON.stringify(selectedFeatures);
+
+    const mfs = [...mfTbody.querySelectorAll("tr")].map(tr => ({
+      name: tr.querySelector(".mf_name").value.trim(),
+      expression: tr.querySelector(".mf_expr").value.trim()
+    })).filter(x => x.name && x.expression);
+    manualFeaturesJsonEl.value = JSON.stringify(mfs);
   });
 </script>
 {% endblock %}

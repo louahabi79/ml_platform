@@ -5,6 +5,7 @@ urlpatterns = [
     path("", ui_views.dashboard, name="dashboard"),
 
     path("projects/<int:project_id>/", ui_views.project_detail, name="project_detail"),
+    path("projects/<int:project_id>/comparison/", ui_views.project_comparison, name="project_comparison"),
 
     path("datasets/upload/", ui_views.dataset_upload, name="dataset_upload"),
     path("datasets/<int:dataset_id>/", ui_views.dataset_detail, name="dataset_detail"),
@@ -16,8 +17,8 @@ urlpatterns = [
     path("experiments/create/<int:pipeline_id>/", ui_views.experiment_create, name="experiment_create"),
     path("experiments/<int:experiment_id>/", ui_views.experiment_results, name="experiment_results"),
 
-    path("artifacts/model/<int:experiment_id>/download/", ui_views.download_model, name="download_model"),
-
     path("experiments/<int:experiment_id>/predict/", ui_views.predict_view, name="predict_view"),
     path("experiments/<int:experiment_id>/report.pdf", ui_views.download_report_pdf, name="download_report_pdf"),
+
+    path("artifacts/model/<int:experiment_id>/download/", ui_views.download_model, name="download_model"),
 ]

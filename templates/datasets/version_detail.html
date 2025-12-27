@@ -25,12 +25,12 @@
               </tr>
             </thead>
             <tbody>
-              {% for c in columns %}
+              {% for r in row_data %}
                 <tr>
-                  <td>{{ c.name }}</td>
-                  <td><code>{{ c.dtype }}</code></td>
-                  <td>--</td>
-                  <td>--</td>
+                  <td>{{ r.name }}</td>
+                  <td><code>{{ r.dtype }}</code></td>
+                  <td>{{ r.missing }}</td>
+                  <td>{{ r.unique }}</td>
                 </tr>
               {% endfor %}
             </tbody>
