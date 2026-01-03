@@ -6,40 +6,35 @@
 
   <div class="card shadow-sm">
     <div class="card-body">
-      <form method="post" enctype="multipart/form-data" class="row g-3">
+      <form method="post" enctype="multipart/form-data">
         {% csrf_token %}
-
-        <div class="col-md-6">
-          <label class="form-label">Project</label>
-          <select class="form-select" name="project_id" required>
-            <option value="">Select a project</option>
-            {% for p in projects %}
-              <option value="{{ p.id }}">{{ p.name }}</option>
-            {% endfor %}
-          </select>
-          <div class="form-text">Projects group datasets, pipelines, and experiments.</div>
+        <div class="form-group">
+            <label for="project_id">Project</label>
+            <select class="form-control" name="project_id" required>
+                {% for project in projects %}
+                    <option value="{{ project.id }}">{{ project.name }}</option>
+                {% endfor %}
+            </select>
         </div>
 
-        <div class="col-md-6">
-          <label class="form-label">Dataset Name</label>
-          <input class="form-control" name="dataset_name" placeholder="e.g., House Prices" required />
+        <div class="form-group">
+            <label for="dataset_name">Dataset Name</label>
+            <input class="form-control" type="text" name="dataset_name" required>
         </div>
 
-        <div class="col-12">
-          <label class="form-label">Description (optional)</label>
-          <textarea class="form-control" name="description" rows="2"></textarea>
+        <div class="form-group">
+            <label for="description">Description</label>
+            <textarea class="form-control" name="description"></textarea>
         </div>
 
-        <div class="col-12">
-          <label class="form-label">CSV File</label>
-          <input class="form-control" type="file" name="file" accept=".csv" required />
+        <div class="form-group">
+            <label for="file">Dataset File (CSV, XLS, XLSX)</label>
+            <input class="form-control" type="file" name="file" accept=".csv,.xls,.xlsx" required>
         </div>
 
-        <div class="col-12 d-flex gap-2">
-          <button class="btn btn-primary" type="submit">Upload & Profile</button>
-          <a class="btn btn-outline-secondary" href="{% url 'dashboard' %}">Cancel</a>
-        </div>
+        <button class="btn btn-primary" type="submit">Upload</button>
       </form>
+
     </div>
   </div>
 {% endblock %}

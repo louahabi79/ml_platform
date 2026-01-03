@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 from typing import Any, Dict
+import io
 
+import os
+import openpyxl
 import pandas as pd
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
@@ -10,6 +13,7 @@ from django.http import FileResponse, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 from rest_framework.exceptions import ValidationError as DRFValidationError
+
 
 from apps.datasets.models import Project, Dataset, DatasetVersion
 from apps.ml_models.models import Algorithm, Pipeline, PipelineStep, Experiment, MLTaskType, ModelArtifact, EvaluationResult, ManualFeature
@@ -166,17 +170,51 @@ def dataset_upload(request: HttpRequest) -> HttpResponse:
         dataset.description = description
         dataset.save(update_fields=["description", "updated_at"])
 
-    content = file.read()
+    # --- NEW FILE HANDLING LOGIC ---
+    # --- ROBUST FILE HANDLING LOGIC ---
+    ext = os.path.splitext(file.name)[1].lower()
+    
+    try:
+        if ext in ['.xls', '.xlsx']:
+            # Try reading as Excel
+            df = pd.read_excel(file, engine='openpyxl')
+            content = df.to_csv(index=False).encode('utf-8')
+            # Change filename to .csv for consistency
+            filename = os.path.splitext(file.name)[0] + ".csv"
+            from django.core.files.base import ContentFile
+            file_to_save = ContentFile(content, name=filename)
+        else:
+            # Assume CSV
+            content = file.read()
+            file.seek(0)
+            file_to_save = file
+            # Quick check: can pandas read it?
+            try:
+                pd.read_csv(io.BytesIO(content))
+            except Exception:
+                # If CSV fails, maybe it was a renamed Excel file? Try Excel reader as backup
+                file.seek(0)
+                df = pd.read_excel(file, engine='openpyxl')
+                content = df.to_csv(index=False).encode('utf-8')
+                file_to_save = ContentFile(content, name=os.path.splitext(file.name)[0] + ".csv")
+
+    except Exception as e:
+        return render(request, "datasets/upload.html", {
+            "projects": projects,
+            "errors": {"file": f"Could not read file. Ensure it is a valid CSV or Excel file. Error: {str(e)}"}
+        })
+
     sha256 = DatasetVersion.compute_sha256(content)
+    
+    # ... (Versioning logic stays same) ...
     latest = DatasetVersion.objects.filter(dataset=dataset).order_by("-version_number").first()
     next_version = (latest.version_number + 1) if latest else 1
-    file.seek(0)
 
     dv = DatasetVersion.objects.create(
         dataset=dataset,
         created_by=request.user,
         version_number=next_version,
-        file=file,
+        file=file_to_save, # Use the potentially converted file
         sha256=sha256,
         row_count=0,
         column_count=0,
@@ -186,6 +224,7 @@ def dataset_upload(request: HttpRequest) -> HttpResponse:
     )
 
     # Profile now (real)
+    # Re-read from saved path (now always CSV compatible)
     df = pd.read_csv(dv.file.path)
     dv.row_count = int(df.shape[0])
     dv.column_count = int(df.shape[1])
@@ -543,3 +582,69 @@ def download_report_pdf(request: HttpRequest, experiment_id: int) -> HttpRespons
     resp = HttpResponse(pdf_bytes, content_type="application/pdf")
     resp["Content-Disposition"] = f'attachment; filename="{filename}"'
     return resp
+
+
+
+@login_required
+def dataset_create_manual(request):
+    projects = Project.objects.filter(owner=request.user).order_by("-updated_at")
+
+    if request.method == "GET":
+        return render(request, "datasets/create_manual.html", {"projects": projects})
+
+    project_id = request.POST.get("project_id")
+    dataset_name = (request.POST.get("dataset_name") or "").strip()
+    description = (request.POST.get("description") or "").strip()
+    rows_json = request.POST.get("rows_json")
+    columns_json = request.POST.get("columns_json")
+
+    errors = {}
+    if not project_id:
+        errors["project_id"] = "Project is required."
+    if not dataset_name:
+        errors["dataset_name"] = "Dataset name is required."
+    if not rows_json or not columns_json:
+        errors["rows_json"] = "Dataset rows and columns are required."
+
+    if errors:
+        return render(request, "datasets/create_manual.html", {"projects": projects, "errors": errors})
+
+    # Parse the JSON data
+    try:
+        columns = json.loads(columns_json)
+        rows = json.loads(rows_json)
+    except ValueError as e:
+        errors["json_parse"] = f"Error parsing JSON data: {str(e)}"
+        return render(request, "datasets/create_manual.html", {"projects": projects, "errors": errors})
+
+    # Create the dataset as a DataFrame
+    data = {col["name"]: [] for col in columns}
+    for row in rows:
+        for col in columns:
+            data[col["name"]].append(row.get(col["name"], None))
+    df = pd.DataFrame(data)
+
+    # Simulate CSV upload for DatasetVersion compatibility
+    csv_file = df.to_csv(index=False)
+    sha256 = DatasetVersion.compute_sha256(csv_file.encode())
+    dataset = Dataset.objects.create(
+        owner=request.user,
+        project_id=int(project_id),
+        name=dataset_name,
+        description=description,
+    )
+    dataset_version = DatasetVersion.objects.create(
+        dataset=dataset,
+        created_by=request.user,
+        version_number=1,
+        file=None,  # Simulating CSV upload without file input
+        sha256=sha256,
+        row_count=df.shape[0],
+        column_count=df.shape[1],
+        schema_json={"columns": [{"name": c, "dtype": str(df[c].dtype)} for c in df.columns]},
+        profile_json={},
+        notes="",
+    )
+
+    return redirect("dataset_version_detail", version_id=dataset_version.id)
+

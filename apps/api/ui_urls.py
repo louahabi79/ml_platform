@@ -21,4 +21,6 @@ urlpatterns = [
     path("experiments/<int:experiment_id>/report.pdf", ui_views.download_report_pdf, name="download_report_pdf"),
 
     path("artifacts/model/<int:experiment_id>/download/", ui_views.download_model, name="download_model"),
+
+    path("datasets/create/manual/", ui_views.dataset_create_manual, name="dataset_create_manual"),
 ]
